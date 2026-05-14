@@ -1,0 +1,338 @@
+# JARVIS — Build Plan
+
+Local voice-first personal assistant. Everything (wake word, STT, LLM, TTS, memory)
+runs on-device. Cloud is opt-in only and currently scoped out.
+
+---
+
+## 1. Vision
+
+A daily-use, voice-activated personal assistant for a single user (Gavin) running on
+an Apple Silicon Mac. It should feel as immediate and natural as Siri, but be
+private, hackable, and extensible — anything Gavin asks of it should be expressible
+as a tool call against a local MCP server.
+
+**Non-goals for v1:** multi-user support, mobile/phone access, remote-API
+fallback, real-time interruption ("barge-in") of TTS, persistent voice biometrics.
+
+---
+
+## 2. Locked Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| LLM backend | **Local via Ollama** | Private posture; no prompts leave the machine |
+| LLM model | **Qwen 2.5 7B Instruct (Q4_K_M)** | Best tool-use among local 7B models; ~5GB fits comfortably in 16GB RAM |
+| Hardware target | Apple Silicon Mac, 16GB RAM | Sweet spot for 7-8B models with Metal acceleration |
+| Primary interface | **Voice + wake word** ("Hey Jarvis") | The JARVIS feel; hands-free |
+| Wake word engine | **openwakeword** (`hey_jarvis_v0.1`) | Free, open, ships a "Hey Jarvis" model out of the box |
+| STT | **faster-whisper** `small.en` | Pip-installable, fast on Apple Silicon, English-only is plenty |
+| TTS | **macOS `say`** (v1) → Piper later | Zero-setup MVP; swap to Piper when robot voice gets annoying |
+| Orchestrator | Python 3.12, single long-running process | Best ecosystem for audio + ML glue |
+| Memory | **SQLite + sqlite-vec**, local only | Tiny (~10-100MB/year); kept off cloud for privacy |
+| Embeddings | `nomic-embed-text` via Ollama (274MB) | Local, integrates with existing Ollama runtime |
+| Tool extensibility | **MCP servers** (not hand-rolled) | Inherits existing Gmail/Calendar/filesystem/search ecosystem |
+| Agent architecture | **Single tool-use loop** | Multi-agent only if evidence warrants; resist premature complexity |
+| Proactivity | **Reactive only** for v1 | Predictable; no scheduler to maintain |
+| Safety posture | **Always confirm destructive actions by voice** | Tools declare `risk: read \| write \| destructive`; ≥ write requires yes/no |
+| Source storage | Local git + private GitHub backup | Code is fine on GitHub; operational data is not |
+| Operational data | Local only (`~/.jarvis/`) | Memory, OAuth tokens, logs — never sync to iCloud/Dropbox |
+
+---
+
+## 3. Architecture
+
+### 3.1 Component diagram (text)
+
+```
+                ┌─────────────────────────────────────────────────────┐
+                │                Long-running Python process          │
+                │                                                     │
+  mic ──► [Wake word] ──► [Recorder] ──► [Whisper STT] ──► [Agent loop]
+                │              │              │                │      │
+                │              │              │                │      │
+                │           silence VAD    text in           tool use │
+                │                                              │      │
+                │                                  ┌───────────┴───┐  │
+                │                                  ▼               ▼  │
+                │                              [Ollama]      [MCP tools]
+                │                              Qwen 2.5      Gmail/Cal/
+                │                              7B            FS/search/
+                │                                            AppleScript
+                │                                  │               │  │
+                │                                  └───────┬───────┘  │
+                │                                          ▼          │
+                │                              [Memory: SQLite +      │
+                │                               sqlite-vec]           │
+                │                                          │          │
+                │                                          ▼          │
+                │                                  [TTS: `say`] ──► speaker
+                └─────────────────────────────────────────────────────┘
+```
+
+### 3.2 Data flow per turn
+
+1. Mic stream → wake-word model on 80ms chunks (always-on, low CPU).
+2. On wake → audible "yes" → start recording.
+3. RMS-based silence detection ends the recording (>=900ms below threshold *after* hearing speech).
+4. Buffer → Whisper → text.
+5. Text + retrieved memories → Qwen via Ollama with tool schema.
+6. If tool call: validate JSON → check risk gate → (confirm by voice if needed) → execute via MCP client → feed result back.
+7. Final response → `say` → speaker.
+8. Conversation + extracted facts → memory store.
+
+### 3.3 Process boundaries
+
+- **Single Python process** owns the mic, the LLM client, the MCP clients, and the memory DB.
+- **Ollama** runs as its own background daemon (`ollama serve`), reachable on `localhost:11434`.
+- **MCP servers** run as subprocesses spawned by the Python process (stdio transport).
+
+---
+
+## 4. Repository Layout
+
+```
+~/jarvis/
+├── pyproject.toml              # uv project, Python 3.12, deps
+├── README.md                   # Setup + roadmap
+├── PLAN.md                     # This file
+├── LICENSE
+├── .gitignore
+├── .env.example
+├── src/jarvis/
+│   ├── __init__.py             # __version__
+│   ├── __main__.py             # python -m jarvis
+│   ├── cli.py                  # argparse: echo | run | setup
+│   ├── config.py               # Settings dataclass, env-driven
+│   ├── audio/
+│   │   ├── wakeword.py         # openwakeword listener
+│   │   ├── recorder.py         # mic + energy-based end-of-speech
+│   │   ├── stt.py              # faster-whisper wrapper
+│   │   └── tts.py              # `say` subprocess
+│   ├── loops/
+│   │   └── echo.py             # Phase 1 loop (no LLM)
+│   ├── agent/                  # [Phase 2+] tool-use loop, Ollama client
+│   ├── tools/                  # [Phase 3+] MCP client, tool registry, risk gates
+│   └── memory/                 # [Phase 7] sqlite-vec, fact extraction, retrieval
+└── ~/.jarvis/                  # Operational data dir (outside repo)
+    ├── memory.db               # SQLite + sqlite-vec
+    ├── oauth/                  # OAuth tokens (Gmail, Calendar)
+    └── logs/
+```
+
+---
+
+## 5. Build Phases
+
+Estimates assume focused work sessions; calendar time will be longer.
+
+### Phase 0 — Foundations ✅ DONE
+
+- [x] `uv` Python 3.12 project at `/Users/gavin/jarvis`
+- [x] Repo layout (`src/jarvis/{audio,agent,tools,memory,loops}`)
+- [x] `pyproject.toml` with Darwin-only resolver scope (workaround for `tflite-runtime`)
+- [x] `.gitignore`, `.env.example`
+- [x] `jarvis --version` and `jarvis --help` working
+
+**Done when:** ✅ `uv run jarvis --version` prints `jarvis 0.1.0`.
+
+---
+
+### Phase 1 — Hello-voice echo loop ✅ CODE DONE / ⏳ HARDWARE TEST PENDING
+
+End-to-end voice pipeline with **no intelligence** — JARVIS just repeats what you said.
+Highest-risk phase because it's the first time real audio touches real hardware.
+
+- [x] `audio/wakeword.py` — openwakeword listener, blocks until "Hey Jarvis"
+- [x] `audio/recorder.py` — mic capture + RMS-energy end-of-speech detection
+- [x] `audio/stt.py` — faster-whisper `small.en`, lazy-loaded
+- [x] `audio/tts.py` — macOS `say` subprocess
+- [x] `loops/echo.py` — wires the four together
+- [x] `jarvis setup` pre-downloads wake-word + Whisper models
+- [x] All deps installed (`uv sync` succeeded — 43 packages in `.venv`)
+- [x] Import smoke-test passes
+- [ ] **User test:** run `uv run jarvis echo`, grant mic permission, validate the loop
+
+**Done when:** "Hey Jarvis, testing one two three" → JARVIS says back "testing one two three".
+
+**Known knobs to tune after first test (config.py):**
+- `wake_threshold` (default 0.5) — raise to reduce false wakes
+- `silence_rms_threshold` (default 0.01) — raise in noisy rooms, lower in quiet ones
+- `silence_duration_ms` (default 900) — how long of a pause ends a sentence
+
+---
+
+### Phase 2 — Add the brain (LLM in the loop)
+
+Swap the echo step for a real Qwen response. Still no tools.
+
+- [ ] `brew install ollama` + `ollama serve` (as background service)
+- [ ] `ollama pull qwen2.5:7b-instruct-q4_K_M` (~4.7GB)
+- [ ] Add `ollama` Python client dep
+- [ ] `agent/llm.py` — thin wrapper around Ollama's chat API
+- [ ] `agent/prompt.py` — system prompt (concise, low-affect, "you are Gavin's local assistant")
+- [ ] `loops/chat.py` — replaces `echo.py`: wake → STT → LLM → TTS
+- [ ] Keep last N turns of conversation in memory (session-only for now)
+- [ ] Add `jarvis run` CLI command pointing at `chat.py`
+
+**Done when:** "Hey Jarvis, what's the capital of France" → spoken answer.
+
+**Estimate:** ~½ day.
+
+---
+
+### Phase 3 — First MCP tool: web search
+
+Validates the MCP plumbing on a read-only tool (no confirmation flow needed yet).
+
+- [ ] Add `mcp` Python SDK dep
+- [ ] `tools/mcp_client.py` — manages MCP server subprocess + tool listing
+- [ ] Pick + configure a web-search MCP server (Brave Search or Tavily — both have free tiers)
+- [ ] `agent/tool_loop.py` — the actual tool-use loop:
+  - Model emits tool call (JSON in response)
+  - Validate against JSON schema
+  - If malformed, retry once with error feedback (local LLMs need this)
+  - Execute via MCP client
+  - Feed result back into the conversation
+  - Loop until model emits a text-only response
+- [ ] `tools/registry.py` — central registry; each tool declares `name`, `description`, `schema`, `risk_level`
+- [ ] Wire web search into the registry with `risk: read`
+
+**Done when:** "Hey Jarvis, what's the weather in San Francisco" returns a real, current answer.
+
+**Estimate:** ~1 day.
+
+---
+
+### Phase 4 — macOS control + voice-confirmation flow
+
+The "JARVIS feels real" moment. Also where safety gates come online because AppleScript can do anything.
+
+- [ ] `tools/applescript.py` — `run_applescript(script: str)` MCP tool, `risk: write`
+- [ ] Filesystem MCP server (read paths whitelisted, write paths confirmed)
+- [ ] `agent/confirmation.py` — voice-confirm flow:
+  - Build human-readable summary of the pending action
+  - `say` the summary + "Confirm?"
+  - Record a short response (≤3s)
+  - STT → match against yes/no patterns (`yes|yeah|sure|do it` vs `no|nope|cancel`)
+  - If ambiguous: re-ask once, then default to no
+- [ ] Risk-level enforcement in `tool_loop.py`: anything ≥ `write` routes through confirmation
+- [ ] Common scripts as built-in helpers: open app, control Music, set Do Not Disturb, type text into focused app
+
+**Done when:** "Hey Jarvis, open Spotify and play Daft Punk" → confirms → plays.
+
+**Estimate:** ~1–2 days. Confirmation UX is the fiddly bit.
+
+---
+
+### Phase 5 — Calendar + reminders
+
+- [ ] Google Calendar MCP server (open-source one; one-time OAuth in browser)
+- [ ] Store OAuth tokens in `~/.jarvis/oauth/` with `0600` perms
+- [ ] Apple Reminders via AppleScript (no OAuth, easier)
+- [ ] Tool risk levels: read-list = `read`, create-event = `write`, delete-event = `destructive`
+
+**Done when:**
+- "What's on my calendar tomorrow?" → spoken summary
+- "Add a reminder to email Sarah at 3pm" → creates reminder (confirmed)
+
+**Estimate:** ~1 day. OAuth dance is the main friction.
+
+---
+
+### Phase 6 — Gmail
+
+Saved for last because it has the largest schema surface and the highest stakes (sending email).
+
+- [ ] Open-source Gmail MCP server + OAuth
+- [ ] Read/search tools first; ship and use them for a day
+- [ ] Then draft tools (create draft, save to Drafts folder — still safe)
+- [ ] Finally send tool: `risk: destructive`, always confirms with full preview of recipient + subject + first 100 chars of body
+
+**Done when:**
+- "Summarize my unread email" works reliably
+- "Reply to Alex's email saying I'm in" drafts → confirms → sends
+
+**Estimate:** ~1–2 days.
+
+---
+
+### Phase 7 — Long-term memory
+
+- [ ] `ollama pull nomic-embed-text` (274MB embedding model)
+- [ ] Add `sqlite-vec` extension; create `memory.db` with `episodes` and `facts` tables
+- [ ] `memory/store.py` — write episodes + embeddings each turn
+- [ ] `memory/retrieve.py` — top-K relevant retrieval at turn start, injected into system prompt
+- [ ] `memory/extract.py` — periodic job (every 10 turns?) that asks the LLM to extract durable facts from recent episodes into the `facts` table
+- [ ] `memory/manage.py` — CLI to inspect, delete, or export memories (`jarvis memory list`, `jarvis memory forget <id>`)
+
+**Done when:** Tell it "I prefer matcha over coffee" Monday; next week, ask "what should I order at the cafe" — it remembers.
+
+**Estimate:** ~1–2 days. Extraction prompt tuning is the variable cost.
+
+---
+
+## 6. Privacy & Safety
+
+### What stays local, always
+
+- Microphone audio (never persisted by default; transient buffer only)
+- Whisper transcripts
+- LLM prompts and responses
+- Memory database (`~/.jarvis/memory.db`)
+- OAuth tokens (`~/.jarvis/oauth/`)
+- Conversation logs
+
+### What leaves the machine (and when)
+
+- Web search queries → search-provider API (Phase 3+). Treat search queries as semi-public.
+- Gmail / Calendar API calls → Google. Necessary for those tools to work; OAuth-scoped.
+
+### Confirmation matrix (Phase 4 onward)
+
+| Risk | Examples | Behavior |
+|---|---|---|
+| `read` | search the web, read calendar, list files, query memory | execute silently |
+| `write` | create event, create draft, open app, run AppleScript | voice-confirm with summary |
+| `destructive` | send email, delete file, run arbitrary shell | voice-confirm + read full payload aloud |
+
+Confirmation default on ambiguous STT: **no**. Better to make Gavin repeat himself than to send the wrong email.
+
+---
+
+## 7. Open Risks
+
+| Risk | Likelihood | Mitigation |
+|---|---|---|
+| Qwen 2.5 7B tool-use is too unreliable | Medium | JSON schema validation + retry-with-error. Escape hatch: hybrid mode (Claude API for agent loop, keep local audio) |
+| openwakeword false wakes are annoying | Medium-low | Tune threshold; consider Picovoice Porcupine (paid, more accurate) if intolerable |
+| Whisper `small.en` misses domain words | Low | Upgrade to `medium.en` (1.5GB) or use prompt-conditioning |
+| macOS `say` voice gets unbearable | Certain | Phase 1.5 swap to Piper — drop-in replacement, ~1hr work |
+| Energy-based VAD cuts off in noisy rooms | Medium | Swap to silero-vad (already bundled by openwakeword) |
+| OAuth tokens leak | Low | `0600` perms, document that `~/.jarvis/` is sensitive |
+| Mac dies, memory gone | Real but tolerable for v1 | Phase 7+: `restic` encrypted backups to B2/S3 |
+
+---
+
+## 8. Out of Scope for v1 (Maybe Later)
+
+- Mobile / phone client
+- Multi-user
+- Real-time barge-in (interrupt TTS by speaking)
+- Voice biometrics / wake-word personalization
+- Streaming responses (TTS starts before LLM finishes)
+- Proactive notifications ("flight delayed", "meeting in 5")
+- Multi-agent orchestration (specialist sub-agents)
+- Smart-home control (HomeKit / HA)
+- Cloud sync of memory (still rejected by current privacy posture)
+- A GUI
+
+---
+
+## 9. Current Status (2026-05-14)
+
+- **Phase 0:** ✅ Complete
+- **Phase 1:** ✅ Code complete, ⏳ awaiting first hardware mic test
+- **Phase 2–7:** Not started
+
+**Next concrete action:** User runs `uv run jarvis echo` in a fresh terminal, grants mic permission, and reports back whether the wake → STT → echo loop works end-to-end.
