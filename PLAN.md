@@ -138,7 +138,7 @@ Estimates assume focused work sessions; calendar time will be longer.
 
 ---
 
-### Phase 1 — Hello-voice echo loop ✅ CODE DONE / ⏳ HARDWARE TEST PENDING
+### Phase 1 — Hello-voice echo loop ✅ DONE (hardware-validated 2026-05-15)
 
 End-to-end voice pipeline with **no intelligence** — JARVIS just repeats what you said.
 Highest-risk phase because it's the first time real audio touches real hardware.
@@ -151,7 +151,7 @@ Highest-risk phase because it's the first time real audio touches real hardware.
 - [x] `jarvis setup` pre-downloads wake-word + Whisper models
 - [x] All deps installed (`uv sync` succeeded — 43 packages in `.venv`)
 - [x] Import smoke-test passes
-- [ ] **User test:** run `uv run jarvis echo`, grant mic permission, validate the loop
+- [x] **User test:** ran `uv run jarvis echo`, granted mic permission, loop validated end-to-end (2026-05-15)
 
 **Done when:** "Hey Jarvis, testing one two three" → JARVIS says back "testing one two three".
 
@@ -159,6 +159,44 @@ Highest-risk phase because it's the first time real audio touches real hardware.
 - `wake_threshold` (default 0.5) — raise to reduce false wakes
 - `silence_rms_threshold` (default 0.01) — raise in noisy rooms, lower in quiet ones
 - `silence_duration_ms` (default 900) — how long of a pause ends a sentence
+
+#### How to measure each number
+
+The echo loop now prints what you need — you just read it off the terminal.
+
+| Metric | How to get it |
+|---|---|
+| **Tuning values** | Whatever is in `config.py` after you stopped fiddling. If you never changed them, they're the defaults above — write "default". |
+| **Latency** | The `[timing]` line prints it: `eos->audio` is end-of-speech → first audio out (the headline number). Do ~5 turns, take the rough median. |
+| **STT accuracy** | Eyeball the `[stt]` line vs. what you said over ~10 utterances. Note the miss rate and any *consistent* misses (names, jargon). |
+| **False wakes** | Leave `jarvis echo` running while you work/talk normally. Each wake prints `[wake #N @ HH:MM:SS]`. Count the ones you didn't trigger; note the window length. |
+
+Procedure: run `uv run jarvis echo`, do ~5 clean test phrases for latency/STT, then leave it idle-running ~30–60 min for the false-wake count. Copy the numbers into the block below.
+
+#### Baseline measurements (fill in — this is the data that makes Phase 1 resume-grade)
+
+```
+Date / room ............ 2026-05-15, <quiet apartment | noisy | etc.>
+Hardware ............... <Mac model>, 16GB RAM
+
+Tuning (config.py):
+  wake_threshold ....... <default 0.5 | changed to X because ...>
+  silence_rms_threshold  <default 0.01 | changed to X because ...>
+  silence_duration_ms .. <default 900 | changed to X because ...>
+
+Latency (median of ~5 turns, from [timing] line):
+  stt .................. <___ ms>
+  eos -> audio ......... <___ ms>   <- headline Phase 1 latency
+
+STT accuracy:
+  ~<__>/10 utterances correct
+  consistent misses .... <none | "Gavin"->"Galvin" | etc.>
+
+False wakes:
+  <__> false wakes over <__> min of normal use  (target: <1/day)
+
+Verdict: <ship as-is | needs Silero VAD | needs medium.en | etc.>
+```
 
 ---
 
@@ -332,7 +370,7 @@ Confirmation default on ambiguous STT: **no**. Better to make Gavin repeat himse
 ## 9. Current Status (2026-05-14)
 
 - **Phase 0:** ✅ Complete
-- **Phase 1:** ✅ Code complete, ⏳ awaiting first hardware mic test
+- **Phase 1:** ✅ Complete — hardware-validated 2026-05-15 (wake → STT → echo loop works end-to-end)
 - **Phase 2–7:** Not started
 
-**Next concrete action:** User runs `uv run jarvis echo` in a fresh terminal, grants mic permission, and reports back whether the wake → STT → echo loop works end-to-end.
+**Next concrete action:** Begin Phase 2 — install Ollama, pull `qwen2.5:7b-instruct-q4_K_M`, and swap the echo step for a real LLM response (`loops/chat.py`).
