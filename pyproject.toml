@@ -9,6 +9,7 @@ dependencies = [
     "sounddevice>=0.5.0",
     "numpy>=1.26",
     "faster-whisper>=1.0.3",
+    "ollama>=0.3.0",
 ]
 
 [project.scripts]

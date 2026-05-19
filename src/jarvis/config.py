@@ -32,6 +32,11 @@ class Settings:
     ollama_model: str = field(
         default_factory=lambda: _env("JARVIS_OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M")
     )
+    ollama_host: str = field(
+        default_factory=lambda: _env("JARVIS_OLLAMA_HOST", "http://localhost:11434")
+    )
+    # Session-only conversation memory (Phase 2). Long-term memory is Phase 7.
+    max_history_turns: int = 6
 
 
 settings = Settings()

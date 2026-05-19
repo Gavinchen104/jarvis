@@ -200,22 +200,32 @@ Verdict: <ship as-is | needs Silero VAD | needs medium.en | etc.>
 
 ---
 
-### Phase 2 — Add the brain (LLM in the loop)
+### Phase 2 — Add the brain (LLM in the loop) ✅ CODE DONE / ⏳ VOICE TEST PENDING
 
 Swap the echo step for a real Qwen response. Still no tools.
 
-- [ ] `brew install ollama` + `ollama serve` (as background service)
-- [ ] `ollama pull qwen2.5:7b-instruct-q4_K_M` (~4.7GB)
-- [ ] Add `ollama` Python client dep
-- [ ] `agent/llm.py` — thin wrapper around Ollama's chat API
-- [ ] `agent/prompt.py` — system prompt (concise, low-affect, "you are Gavin's local assistant")
-- [ ] `loops/chat.py` — replaces `echo.py`: wake → STT → LLM → TTS
-- [ ] Keep last N turns of conversation in memory (session-only for now)
-- [ ] Add `jarvis run` CLI command pointing at `chat.py`
+- [x] `brew install ollama` (0.24.0) + `ollama serve` running with
+  `OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0` (RAM-friendly)
+- [x] `ollama pull qwen2.5:7b-instruct-q4_K_M` (4.7GB, verified in `ollama list`)
+- [x] Added `ollama>=0.3.0` dep (resolved to 0.6.2), `uv sync` OK
+- [x] `agent/llm.py` — thin Ollama chat wrapper, clear error if daemon down
+- [x] `agent/prompt.py` — voice-tuned system prompt (brief, no markdown — it gets read aloud)
+- [x] `loops/chat.py` — wake → STT → LLM → TTS, with `[timing]` instrumentation
+- [x] Session history: last `max_history_turns` (6) pairs, system prompt pinned
+- [x] `jarvis run` wired in `cli.py` (removed now-unused `sys` import)
+- [x] Headless validation: import + history-trim unit check + live LLM round-trip
+- [ ] **User test:** `uv run jarvis run`, say "Hey Jarvis, what's the capital of France"
 
 **Done when:** "Hey Jarvis, what's the capital of France" → spoken answer.
 
-**Estimate:** ~½ day.
+**Headless measurements (2026-05-18):**
+- LLM cold start (first call, loads 4.7GB into RAM): **~29s** — the first
+  query after launch is always slow. Mitigation idea: a warm-up call at
+  startup so the *user's* first turn is fast (deferred — note it).
+- LLM warm latency, short answers: **~0.6–1.1s** (well under the 2.5s budget).
+- System prompt working: replies are short, plain prose, no markdown.
+
+**Estimate:** ~½ day. (Actual: code complete; voice test outstanding.)
 
 ---
 
@@ -371,6 +381,7 @@ Confirmation default on ambiguous STT: **no**. Better to make Gavin repeat himse
 
 - **Phase 0:** ✅ Complete
 - **Phase 1:** ✅ Complete — hardware-validated 2026-05-15 (wake → STT → echo loop works end-to-end)
-- **Phase 2–7:** Not started
+- **Phase 2:** ✅ Code complete + headless-validated 2026-05-18; ⏳ awaiting voice test
+- **Phase 3–7:** Not started
 
-**Next concrete action:** Begin Phase 2 — install Ollama, pull `qwen2.5:7b-instruct-q4_K_M`, and swap the echo step for a real LLM response (`loops/chat.py`).
+**Next concrete action:** Run `uv run jarvis run`, say "Hey Jarvis, what's the capital of France", confirm a spoken answer. Then Phase 3 (first MCP tool: web search).

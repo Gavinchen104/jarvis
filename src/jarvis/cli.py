@@ -1,5 +1,4 @@
 import argparse
-import sys
 
 from jarvis import __version__
 
@@ -13,7 +12,7 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("echo", help="Phase 1 echo loop: wake → STT → say")
-    subparsers.add_parser("run", help="Full assistant loop (not implemented yet)")
+    subparsers.add_parser("run", help="Phase 2 chat loop: wake → STT → LLM → say")
     subparsers.add_parser(
         "setup", help="Pre-download wake-word and Whisper models"
     )
@@ -37,8 +36,10 @@ def main() -> int:
         return 0
 
     if args.command == "run":
-        print("Phase 2+ not implemented yet. Use 'jarvis echo' for Phase 1.", file=sys.stderr)
-        return 1
+        from jarvis.loops.chat import run_chat
+
+        run_chat()
+        return 0
 
     parser.print_help()
     return 0
