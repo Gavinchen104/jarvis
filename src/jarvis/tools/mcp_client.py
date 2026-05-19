@@ -21,6 +21,15 @@ from typing import Any
 from jarvis.config import settings
 
 
+def _extract_text(content: list[Any]) -> str:
+    """Flatten MCP content blocks to plain text (web tools return text)."""
+    parts: list[str] = []
+    for block in content or []:
+        text = getattr(block, "text", None)
+        parts.append(text if text is not None else str(block))
+    return "\n".join(parts).strip()
+
+
 @dataclass(frozen=True)
 class MCPTool:
     """A tool as advertised by an MCP server, provider-neutral."""
@@ -124,6 +133,24 @@ class MCPClient:
             )
             for t in result.tools
         ]
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+        """Invoke a tool and return its text output, ready to feed back to the LLM.
+
+        Raises RuntimeError/TimeoutError on transport-level failure (not
+        started, dead session, timeout) — the tool-use loop catches these and
+        feeds the error back to the model. A tool that *ran* but reported an
+        error (MCP ``isError``) is not raised: that text is useful feedback
+        the model should see to self-correct, so it's returned with a marker.
+        """
+        result = self._run_sync(
+            self._session.call_tool(name, arguments),
+            timeout=float(settings.tool_timeout_seconds),
+        )
+        text = _extract_text(result.content)
+        if getattr(result, "isError", False):
+            return f"[tool error] {text}".strip()
+        return text
 
     # --- background thread / event loop ------------------------------------
 
