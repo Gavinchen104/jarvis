@@ -38,6 +38,31 @@ class Settings:
     # Session-only conversation memory (Phase 2). Long-term memory is Phase 7.
     max_history_turns: int = 6
 
+    # --- Phase 3: tool use / web search ---
+    # Provider is informational; the actual server is `search_mcp_command`.
+    # Start on "ddg" (no API key) to debug the loop, switch to "tavily" for
+    # answer quality once it works. See PHASE3.md §4.
+    search_provider: str = field(
+        default_factory=lambda: _env("JARVIS_SEARCH_PROVIDER", "ddg")
+    )
+    # Space-separated command the MCP client spawns over stdio. Override the
+    # whole thing via env if the default server package name changes.
+    search_mcp_command: str = field(
+        default_factory=lambda: _env("JARVIS_SEARCH_MCP_CMD", "uvx duckduckgo-mcp-server")
+    )
+    # Empty until the provider needs a key (Tavily/Brave). Never commit values
+    # — these read from .env, which is gitignored.
+    tavily_api_key: str = field(
+        default_factory=lambda: _env("JARVIS_TAVILY_API_KEY", "")
+    )
+    brave_api_key: str = field(
+        default_factory=lambda: _env("JARVIS_BRAVE_API_KEY", "")
+    )
+    # Hard cap on tool-use loop iterations — prevents an infinite call spin.
+    max_tool_iters: int = 5
+    # Per tool-call timeout (seconds) for the MCP round-trip.
+    tool_timeout_seconds: int = 20
+
 
 settings = Settings()
 settings.data_dir.mkdir(parents=True, exist_ok=True)
