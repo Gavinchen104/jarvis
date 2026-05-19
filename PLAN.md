@@ -229,26 +229,57 @@ Swap the echo step for a real Qwen response. Still no tools.
 
 ---
 
-### Phase 3 — First MCP tool: web search
+### Phase 3 — First MCP tool: web search ✅ CODE DONE + MEASURED / ⏳ VOICE TEST + TUNING
 
 Validates the MCP plumbing on a read-only tool (no confirmation flow needed yet).
+Detailed plan: see `PHASE3.md`.
 
-- [ ] Add `mcp` Python SDK dep
-- [ ] `tools/mcp_client.py` — manages MCP server subprocess + tool listing
-- [ ] Pick + configure a web-search MCP server (Brave Search or Tavily — both have free tiers)
-- [ ] `agent/tool_loop.py` — the actual tool-use loop:
-  - Model emits tool call (JSON in response)
-  - Validate against JSON schema
-  - If malformed, retry once with error feedback (local LLMs need this)
-  - Execute via MCP client
-  - Feed result back into the conversation
-  - Loop until model emits a text-only response
-- [ ] `tools/registry.py` — central registry; each tool declares `name`, `description`, `schema`, `risk_level`
-- [ ] Wire web search into the registry with `risk: read`
+- [x] Added `mcp` Python SDK dep
+- [x] `tools/mcp_client.py` — MCP server subprocess + stdio session, list/call
+- [x] Web-search server: **DuckDuckGo MCP** (`uvx duckduckgo-mcp-server`,
+  keyless — debug the loop without an external dependency; swap to Tavily
+  later, see PHASE3.md §4)
+- [x] `agent/tool_loop.py` — **native** Ollama tool-calling (not prompt-based
+  JSON, PHASE3.md §3) + schema validation + retry-with-error + risk gate +
+  iteration cap + graceful fallbacks
+- [x] `tools/registry.py` — central registry; `name/description/schema/risk_level`
+- [x] Web search registered with `risk: read`
+- [x] `evals/toolcall.py` — 28-case golden set + reproducible scorecard
+- [ ] **Voice test:** `uv run jarvis run` → "Hey Jarvis, what's the weather…"
+- [ ] **Tuning (Phase 3.1):** close the 4 under-calls (see below)
+- [ ] **Latency (Phase 3.1):** search-turn p50 ~15s is over the ~5s budget
 
-**Done when:** "Hey Jarvis, what's the weather in San Francisco" returns a real, current answer.
+**Done when:** "Hey Jarvis, what's the weather in San Francisco" returns a real, current answer. ✅ (verified headless; voice pending)
 
-**Estimate:** ~1 day.
+#### Scorecard — `uv run python evals/toolcall.py` (2026-05-18, DuckDuckGo)
+
+```
+Overall tool-call accuracy ... 24/28  (86%)   [target >=90%]
+  should-search recall ....... 10/14
+  no-search specificity ...... 14/14   (zero over-calls)
+Under-calls (missed) ......... 4
+  - who won the game last night
+  - what time does the Apple store in Palo Alto close today
+  - who is the current prime minister of Japan
+  - how did the stock market do today
+Over-calls ................... 0
+Errors ....................... 0
+Latency: search p50=14.9s p95=24.3s | no-search p50=2.0s p95=3.8s
+```
+
+**Honest read (the interview story):** the model is *conservative* — zero
+false searches (perfect specificity), but it under-calls when its stale
+parametric knowledge *feels* sufficient (current officeholder, "who won",
+market direction). That's a **prompt/description tuning** problem, not an
+architecture failure, and 86% is above the PHASE3.md §13 escape-hatch
+threshold (~85%) — no model swap warranted; sharpen the §7 rules in Phase
+3.1. Latency (~15s p50 for search turns) is the bigger gap: root cause is
+the 2nd LLM round synthesizing from ~3KB of raw DDG snippets on a local 7B.
+Fixes: trim results before synthesis, tighter synthesis prompt, or move to
+Tavily (returns a pre-synthesized answer). Recording the real numbers
+rather than a flattering one is the point of having an eval.
+
+**Estimate:** ~1 day. (Actual: core + eval done; Phase 3.1 tuning outstanding.)
 
 ---
 
@@ -377,11 +408,16 @@ Confirmation default on ambiguous STT: **no**. Better to make Gavin repeat himse
 
 ---
 
-## 9. Current Status (2026-05-14)
+## 9. Current Status (2026-05-18)
 
 - **Phase 0:** ✅ Complete
-- **Phase 1:** ✅ Complete — hardware-validated 2026-05-15 (wake → STT → echo loop works end-to-end)
+- **Phase 1:** ✅ Complete — hardware-validated 2026-05-15
 - **Phase 2:** ✅ Code complete + headless-validated 2026-05-18; ⏳ awaiting voice test
-- **Phase 3–7:** Not started
+- **Phase 3:** ✅ Core + eval done 2026-05-18 (86% tool-call accuracy, 0 over-calls);
+  ⏳ voice test + Phase 3.1 tuning (4 under-calls, ~15s search latency)
+- **Phase 4–7:** Not started
 
-**Next concrete action:** Run `uv run jarvis run`, say "Hey Jarvis, what's the capital of France", confirm a spoken answer. Then Phase 3 (first MCP tool: web search).
+**Next concrete action:** Voice test — `uv run jarvis run`, say "Hey Jarvis,
+what's the weather in San Francisco", confirm a real spoken answer. Then
+Phase 3.1 (sharpen tool-use prompt to close the 4 under-calls; cut search
+latency) before moving to Phase 4.
