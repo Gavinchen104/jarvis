@@ -14,8 +14,39 @@ list_tools() and call_tool() land in tasks 4 and 5.
 import asyncio
 import shlex
 import threading
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import dataclass
+from typing import Any
 
 from jarvis.config import settings
+
+
+@dataclass(frozen=True)
+class MCPTool:
+    """A tool as advertised by an MCP server, provider-neutral."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+def to_ollama_tool(tool: MCPTool) -> dict[str, Any]:
+    """Translate an MCP tool into the OpenAI-style schema Ollama expects.
+
+    Ollama's `tools=` param wants:
+        {"type": "function",
+         "function": {"name", "description", "parameters": <json schema>}}
+    MCP gives us name/description/inputSchema (already JSON Schema), so this
+    is a structural rewrap, not a semantic conversion.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.input_schema or {"type": "object", "properties": {}},
+        },
+    }
 
 
 class MCPClient:
@@ -68,6 +99,31 @@ class MCPClient:
 
     def __exit__(self, *_exc: object) -> None:
         self.stop()
+
+    # --- sync dispatch onto the background loop ----------------------------
+
+    def _run_sync(self, coro: Any, timeout: float) -> Any:
+        """Submit a coroutine to the background loop and block for its result."""
+        if self._loop is None or self._session is None:
+            raise RuntimeError("MCPClient not started")
+        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return fut.result(timeout=timeout)
+        except FutureTimeoutError as exc:
+            fut.cancel()
+            raise TimeoutError(f"MCP call exceeded {timeout}s") from exc
+
+    def list_tools(self, timeout: float = 15.0) -> list[MCPTool]:
+        """Return the tools advertised by the server, provider-neutral."""
+        result = self._run_sync(self._session.list_tools(), timeout=timeout)
+        return [
+            MCPTool(
+                name=t.name,
+                description=t.description or "",
+                input_schema=dict(t.inputSchema) if t.inputSchema else {},
+            )
+            for t in result.tools
+        ]
 
     # --- background thread / event loop ------------------------------------
 
