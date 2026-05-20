@@ -6,7 +6,7 @@ from jarvis.agent.tool_loop import run_tool_loop
 from jarvis.audio.recorder import record_until_silence
 from jarvis.audio.stt import get_model, transcribe
 from jarvis.audio.tts import speak
-from jarvis.audio.wakeword import wait_for_wake_word
+from jarvis.audio.wakeword import wait_for_wake_word, warm_wake_model
 from jarvis.config import settings
 from jarvis.tools.mcp_client import MCPClient
 from jarvis.tools.registry import Registry
@@ -22,6 +22,7 @@ def run_chat() -> None:
     """
     print("Warming up Whisper...")
     get_model()
+    warm_wake_model()  # build wake model now, not on the first "Hey Jarvis"
 
     registry = Registry()
     mcp = MCPClient()
