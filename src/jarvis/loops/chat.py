@@ -3,9 +3,9 @@ from datetime import datetime
 
 from jarvis.agent.prompt import SYSTEM_PROMPT
 from jarvis.agent.tool_loop import run_tool_loop
-from jarvis.audio.recorder import record_until_silence
+from jarvis.audio.recorder import calibrate_silence, record_until_silence
 from jarvis.audio.stt import get_model, transcribe
-from jarvis.audio.tts import speak
+from jarvis.audio.tts import cue_heard, speak
 from jarvis.audio.wakeword import wait_for_wake_word, warm_wake_model
 from jarvis.config import settings
 from jarvis.tools.mcp_client import MCPClient
@@ -23,6 +23,9 @@ def run_chat() -> None:
     print("Warming up Whisper...")
     get_model()
     warm_wake_model()  # build wake model now, not on the first "Hey Jarvis"
+    print("Calibrating mic (stay quiet for 1.5s)...")
+    thresh = calibrate_silence()
+    print(f"Silence threshold: {thresh:.4f} RMS")
 
     registry = Registry()
     mcp = MCPClient()
@@ -48,6 +51,7 @@ def run_chat() -> None:
 
             audio = record_until_silence()
             t_eos = time.perf_counter()
+            cue_heard()  # instant "I heard you" — masks the STT+LLM wait
             print(f"[recorded] {audio.size / 16000:.1f}s")
 
             text = transcribe(audio)

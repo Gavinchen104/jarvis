@@ -1,7 +1,7 @@
 import time
 from datetime import datetime
 
-from jarvis.audio.recorder import record_until_silence
+from jarvis.audio.recorder import calibrate_silence, record_until_silence
 from jarvis.audio.stt import get_model, transcribe
 from jarvis.audio.tts import speak
 from jarvis.audio.wakeword import wait_for_wake_word
@@ -17,6 +17,9 @@ def run_echo() -> None:
     """
     print("Warming up Whisper...")
     get_model()
+    print("Calibrating mic (stay quiet for 1.5s)...")
+    thresh = calibrate_silence()
+    print(f"Silence threshold: {thresh:.4f} RMS")
     print("Ready. Say 'Hey Jarvis' to wake. Ctrl-C to quit.")
 
     wake_count = 0

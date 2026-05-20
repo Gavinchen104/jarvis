@@ -24,9 +24,13 @@ class Settings:
     whisper_compute_type: str = "int8"
 
     # Energy-based end-of-speech detection (Phase 1; swap to silero VAD later if needed).
+    # Defaults tuned 2026-05 for snappier perceived UX: higher RMS threshold
+    # treats faint ambient noise as silence (recording ends sooner); shorter
+    # silence window cuts ~200ms off every turn. Tune via env if your room
+    # is noisier (raise threshold) or you pause mid-sentence (raise duration).
     record_chunk_ms: int = 50
-    silence_duration_ms: int = 900
-    silence_rms_threshold: float = 0.01
+    silence_duration_ms: int = 700
+    silence_rms_threshold: float = 0.02
     max_record_seconds: int = 30
 
     ollama_model: str = field(

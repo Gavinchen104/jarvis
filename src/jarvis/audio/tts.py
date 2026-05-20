@@ -45,3 +45,23 @@ def speak(text: str) -> None:
     if not text:
         return
     subprocess.run(["say", text], check=False)
+
+
+# A short, non-blocking system sound to play the instant end-of-speech fires.
+# Without it, the user gets 5-15s of dead silence between speaking and
+# hearing JARVIS — the loop *feels* unresponsive even when it's working. The
+# cue closes that perceptual gap: STT and LLM still take the same time, but
+# the user knows immediately that they were heard.
+_CUE_SOUND = "/System/Library/Sounds/Pop.aiff"
+
+
+def cue_heard() -> None:
+    """Play a short audio confirmation that input was captured. Non-blocking."""
+    try:
+        subprocess.Popen(
+            ["afplay", _CUE_SOUND],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, OSError):
+        pass  # missing afplay or sound file — silently degrade, not worth crashing
