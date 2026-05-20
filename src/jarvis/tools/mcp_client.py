@@ -12,6 +12,7 @@ list_tools() and call_tool() land in tasks 4 and 5.
 """
 
 import asyncio
+import os
 import shlex
 import threading
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -66,8 +67,19 @@ class MCPClient:
             ...        # tasks 4-5 add list_tools() / call_tool()
     """
 
-    def __init__(self, command: str | None = None) -> None:
+    def __init__(
+        self,
+        command: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self._cmd = shlex.split(command or settings.search_mcp_command)
+        # Forward our environment to the spawned server. The MCP SDK uses a
+        # restricted env by default, which strips PATH (so npx/uvx can't be
+        # found) and API keys. For a local single-user assistant this is the
+        # right tradeoff. Caller can pass a curated dict for tighter control.
+        self._env: dict[str, str] = (
+            dict(env) if env is not None else dict(os.environ)
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._session = None  # mcp.ClientSession, set once initialized
@@ -168,7 +180,9 @@ class MCPClient:
         from mcp.client.stdio import stdio_client
 
         self._shutdown = asyncio.Event()
-        params = StdioServerParameters(command=self._cmd[0], args=self._cmd[1:])
+        params = StdioServerParameters(
+            command=self._cmd[0], args=self._cmd[1:], env=self._env
+        )
         try:
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
