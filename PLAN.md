@@ -124,7 +124,11 @@ fallback, real-time interruption ("barge-in") of TTS, persistent voice biometric
 
 ## 5. Build Phases
 
-Estimates assume focused work sessions; calendar time will be longer.
+Estimates assume focused work sessions; calendar time will be longer. Each
+non-trivial phase has its own deep-dive doc (`PHASE3.md` … `PHASE7.md`) with
+file-by-file build breakdowns, failure-mode tables, latency budgets, eval
+designs, and escape hatches. The sections below are summaries — open the
+phase file when you're about to actually build it.
 
 ### Phase 0 — Foundations ✅ DONE
 
@@ -142,6 +146,7 @@ Estimates assume focused work sessions; calendar time will be longer.
 
 End-to-end voice pipeline with **no intelligence** — JARVIS just repeats what you said.
 Highest-risk phase because it's the first time real audio touches real hardware.
+Detailed retrospective: see [PHASE1.md](PHASE1.md).
 
 - [x] `audio/wakeword.py` — openwakeword listener, blocks until "Hey Jarvis"
 - [x] `audio/recorder.py` — mic capture + RMS-energy end-of-speech detection
@@ -203,6 +208,7 @@ Verdict: <ship as-is | needs Silero VAD | needs medium.en | etc.>
 ### Phase 2 — Add the brain (LLM in the loop) ✅ CODE DONE / ⏳ VOICE TEST PENDING
 
 Swap the echo step for a real Qwen response. Still no tools.
+Detailed plan + retrospective: see [PHASE2.md](PHASE2.md).
 
 - [x] `brew install ollama` (0.24.0) + `ollama serve` running with
   `OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0` (RAM-friendly)
@@ -232,7 +238,7 @@ Swap the echo step for a real Qwen response. Still no tools.
 ### Phase 3 — First MCP tool: web search ✅ CODE DONE + MEASURED / ⏳ VOICE TEST + TUNING
 
 Validates the MCP plumbing on a read-only tool (no confirmation flow needed yet).
-Detailed plan: see `PHASE3.md`.
+Detailed plan: see [PHASE3.md](PHASE3.md).
 
 - [x] Added `mcp` Python SDK dep
 - [x] `tools/mcp_client.py` — MCP server subprocess + stdio session, list/call
@@ -285,18 +291,17 @@ rather than a flattering one is the point of having an eval.
 
 ### Phase 4 — macOS control + voice-confirmation flow
 
-The "JARVIS feels real" moment. Also where safety gates come online because AppleScript can do anything.
+The "JARVIS feels real" moment, and where the safety gate comes online for
+every `risk: write` / `destructive` tool. Detailed plan: see
+[PHASE4.md](PHASE4.md).
 
-- [ ] `tools/applescript.py` — `run_applescript(script: str)` MCP tool, `risk: write`
-- [ ] Filesystem MCP server (read paths whitelisted, write paths confirmed)
-- [ ] `agent/confirmation.py` — voice-confirm flow:
-  - Build human-readable summary of the pending action
-  - `say` the summary + "Confirm?"
-  - Record a short response (≤3s)
-  - STT → match against yes/no patterns (`yes|yeah|sure|do it` vs `no|nope|cancel`)
-  - If ambiguous: re-ask once, then default to no
-- [ ] Risk-level enforcement in `tool_loop.py`: anything ≥ `write` routes through confirmation
-- [ ] Common scripts as built-in helpers: open app, control Music, set Do Not Disturb, type text into focused app
+Milestones:
+
+- [ ] AppleScript tool (`risk: write`)
+- [ ] Filesystem MCP server registered with per-op risk levels
+- [ ] `agent/confirmation.py` — voice-confirm flow, ambiguous → no
+- [ ] Risk gate enforced in `tool_loop.py` (every ≥`write` call routes through `confirm`)
+- [ ] `evals/confirm.py` — decision-table test for yes/no classification
 
 **Done when:** "Hey Jarvis, open Spotify and play Daft Punk" → confirms → plays.
 
@@ -306,46 +311,67 @@ The "JARVIS feels real" moment. Also where safety gates come online because Appl
 
 ### Phase 5 — Calendar + reminders
 
-- [ ] Google Calendar MCP server (open-source one; one-time OAuth in browser)
-- [ ] Store OAuth tokens in `~/.jarvis/oauth/` with `0600` perms
-- [ ] Apple Reminders via AppleScript (no OAuth, easier)
-- [ ] Tool risk levels: read-list = `read`, create-event = `write`, delete-event = `destructive`
+First phase with a third-party identity (Google OAuth) and with real
+time-grounding requirements. Detailed plan: see [PHASE5.md](PHASE5.md).
+
+Milestones:
+
+- [ ] Google Calendar MCP server; tokens at `~/.jarvis/oauth/google.json` (0600)
+- [ ] Apple Reminders via dedicated AppleScript tool (not generic `run_applescript`)
+- [ ] Per-op risk: list=`read`, create=`write`, delete=`destructive`
+- [ ] `tools/time_grounding.py` + `evals/time.py` (100% target — parsing is deterministic)
+- [ ] System prompt prepends current date/time each turn
 
 **Done when:**
+
 - "What's on my calendar tomorrow?" → spoken summary
 - "Add a reminder to email Sarah at 3pm" → creates reminder (confirmed)
 
-**Estimate:** ~1 day. OAuth dance is the main friction.
+**Estimate:** ~1 day. OAuth dance and time grounding are the main friction.
 
 ---
 
 ### Phase 6 — Gmail
 
-Saved for last because it has the largest schema surface and the highest stakes (sending email).
+Last because it has the largest schema surface and the highest stakes —
+sending an email is the first thing the assistant can do that genuinely
+cannot be undone. Detailed plan: see [PHASE6.md](PHASE6.md).
 
-- [ ] Open-source Gmail MCP server + OAuth
-- [ ] Read/search tools first; ship and use them for a day
-- [ ] Then draft tools (create draft, save to Drafts folder — still safe)
-- [ ] Finally send tool: `risk: destructive`, always confirms with full preview of recipient + subject + first 100 chars of body
+Milestones (a layered rollout — don't compress the dwell times):
+
+- [ ] Gmail MCP server; tokens at `~/.jarvis/oauth/gmail.json` (0600)
+- [ ] **Read layer** shipped + used ≥3 days
+- [ ] **Draft layer** (`risk: write`) shipped + used ≥2 days
+- [ ] **Send layer** (`risk: destructive`) unlocked only after `evals/gmail.py` ≥90% verb-pick
+- [ ] Send confirmation reads recipient + subject + body preview aloud (`alex dot chen at gmail dot com`)
+- [ ] `tools/address_book.py` (manual JSON map) — model asks rather than guessing addresses
 
 **Done when:**
+
 - "Summarize my unread email" works reliably
 - "Reply to Alex's email saying I'm in" drafts → confirms → sends
 
-**Estimate:** ~1–2 days.
+**Estimate:** ~1–2 days of code, plus the layered dwell time.
 
 ---
 
 ### Phase 7 — Long-term memory
 
-- [ ] `ollama pull nomic-embed-text` (274MB embedding model)
-- [ ] Add `sqlite-vec` extension; create `memory.db` with `episodes` and `facts` tables
-- [ ] `memory/store.py` — write episodes + embeddings each turn
-- [ ] `memory/retrieve.py` — top-K relevant retrieval at turn start, injected into system prompt
-- [ ] `memory/extract.py` — periodic job (every 10 turns?) that asks the LLM to extract durable facts from recent episodes into the `facts` table
-- [ ] `memory/manage.py` — CLI to inspect, delete, or export memories (`jarvis memory list`, `jarvis memory forget <id>`)
+Cross-cutting — touches every turn. Memory's failure modes are silent, so
+the deliverable is the *eval framework* as much as the storage layer.
+Detailed plan: see [PHASE7.md](PHASE7.md).
 
-**Done when:** Tell it "I prefer matcha over coffee" Monday; next week, ask "what should I order at the cafe" — it remembers.
+Milestones:
+
+- [ ] `ollama pull nomic-embed-text`; sqlite-vec extension wired in `db()` helper
+- [ ] `memory/store.py` + `memory/retrieve.py` (episodes + facts split)
+- [ ] `memory/extract.py` — periodic, off the critical path
+- [ ] `memory/manage.py` + CLI (`jarvis memory list / forget / export / compact / remember`)
+- [ ] `evals/memory.py` — plant-and-recall harness with positive *and* negative rows
+- [ ] Retrieval p50 <100ms (memory may not slow turns down)
+
+**Done when:** Tell it "I prefer matcha over coffee" Monday; next week,
+ask "what should I order at the café?" — it remembers.
 
 **Estimate:** ~1–2 days. Extraction prompt tuning is the variable cost.
 
@@ -421,3 +447,78 @@ Confirmation default on ambiguous STT: **no**. Better to make Gavin repeat himse
 what's the weather in San Francisco", confirm a real spoken answer. Then
 Phase 3.1 (sharpen tool-use prompt to close the 4 under-calls; cut search
 latency) before moving to Phase 4.
+
+---
+
+## 10. Command Reference
+
+Single source of truth for every `jarvis ...` subcommand across phases.
+Updated each time a new command lands.
+
+| Command | Phase | What it does |
+|---|---|---|
+| `jarvis --version` | 0 | Print version. |
+| `jarvis --help` | 0 | Subcommand help. |
+| `jarvis setup` | 1 | Pre-download wake-word + Whisper models. |
+| `jarvis setup memory` | 7 | `ollama pull nomic-embed-text`; create empty `memory.db`; load sqlite-vec. |
+| `jarvis echo` | 1 | Voice loop with no intelligence (echo). |
+| `jarvis run` | 2+ | The real assistant — wake → STT → agent → TTS. |
+| `jarvis auth gcal` | 5 | One-time OAuth browser flow for Google Calendar. |
+| `jarvis auth gmail` | 6 | Same for Gmail (separate scopes / token). |
+| `jarvis auth status` | 5 | List known OAuth tokens + expiry + file perms. |
+| `jarvis gmail enable <read\|draft\|send>` | 6 | Set the Gmail capability layer (writes to `~/.jarvis/env`). `send` requires `--force`. |
+| `jarvis memory list [--search Q]` | 7 | Dump all facts (or top-K matching Q). |
+| `jarvis memory remember "<statement>"` | 7 | Manual fact insertion (escape hatch when extraction missed something). |
+| `jarvis memory forget <id>` | 7 | Delete one fact + its vec row. |
+| `jarvis memory export <path>` | 7 | JSON dump of all facts. |
+| `jarvis memory compact` | 7 | VACUUM the DB; rebuild vec indices. |
+| `jarvis memory wipe --force` | 7 | Delete every episode and fact. Saves an export first. |
+
+---
+
+## 11. First-Run Setup (one-time)
+
+The order is deliberate — each step proves the prior one works.
+
+1. **System deps**
+   - `brew install ollama` (≥0.3 for native tool-calling)
+   - `OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 ollama serve` (run as a launchd service in practice)
+   - `ollama pull qwen2.5:7b-instruct-q4_K_M`
+2. **Python env** — `cd ~/jarvis && uv sync` (Python 3.12, Darwin resolver scope).
+3. **Microphone permission** — `uv run jarvis echo` once. macOS prompts; grant.
+4. **Wake-word + Whisper models** — `uv run jarvis setup`. Pre-downloads so the first wake isn't a 30s freeze.
+5. **Smoke** — `uv run jarvis echo`, say "Hey Jarvis, testing one two three." JARVIS repeats it. Phase 1 green.
+6. **LLM smoke** — `uv run jarvis run`, ask "what's the capital of France." Spoken answer in <2.5s warm. Phase 2 green.
+7. **Tool smoke** — same command, ask "what's the weather in San Francisco." Returns a real, current answer (Phase 3).
+8. **Phase 4+ unlocks** — at each later phase, the corresponding `jarvis auth <service>` is the one-time per-service setup.
+
+The setup data lives in two places:
+
+- Code + plans: `~/jarvis/` (this repo).
+- Operational data: `~/.jarvis/` (memory.db, oauth/*.json, logs/, env, address_book.json). Never goes into git; backed up via `restic` if at all (Phase 7+).
+
+---
+
+## 12. Observability
+
+Every phase emits a `[timing]` line per turn with stage-level millisecond
+breakdowns. The keys grow as phases land — this table is the contract.
+
+| Key | Introduced | What it measures |
+|---|---|---|
+| `stt` | 1 | mic buffer → text |
+| `eos->audio` | 1 | end-of-speech → first TTS audio (headline UX number) |
+| `total` | 1 | end-of-speech → silence after TTS |
+| `agent` | 2 | LLM + tool calls (sum of all rounds) |
+| `tool_n` | 3 | Per-tool round-trip (`tool_web_search`, `tool_calendar_list`, …) |
+| `llm_round_n` | 3 | Per LLM round-trip inside the tool loop |
+| `confirm` | 4 | Phase 4 confirmation overhead (TTS + record + STT + classify) |
+| `oauth_refresh` | 5 | Whenever a token refresh fires (should be rare) |
+| `retrieve` | 7 | Memory retrieval at turn start |
+| `embed` | 7 | Per embedding call (`retrieve` decomposes into `embed + sql`) |
+
+Logs and timings go to `~/.jarvis/logs/jarvis-YYYY-MM-DD.log` (line-per-turn
+JSON when running with `--log-json`, otherwise human-readable). No
+audio buffers, STT transcripts, or LLM content are logged by default —
+the timing line is the operational signal; content lives only in
+memory.db once Phase 7 ships.

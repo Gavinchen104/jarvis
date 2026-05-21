@@ -260,6 +260,61 @@ of reliability; the loop in §6 is the *mechanical* half.
 
 ---
 
+## 7.5 Prompt Iteration Log (Real History)
+
+The Phase 3 prompt didn't land in one shot — under-calling and
+result-ignoring both required tightening. Recording the iterations because
+the *pattern* (what went wrong, what fixed it) is more reusable than the
+final prompt text.
+
+### v1: minimal — "you have a tool"
+
+> *"You have a web_search tool. Call it for current information."*
+
+Result: ~62% tool-call accuracy. The model under-called heavily — it
+treated "current information" as a soft suggestion and answered from
+parametric memory for things like *"who's the prime minister of Japan"*
+(stale by months).
+
+### v2: enumerate categories
+
+> *"You have a web_search tool. Use it for: current weather, news,
+> prices, sports results, recent events."*
+
+Result: ~74%. Concrete categories closed the weather/news gap. New
+failure: over-called on definitions ("what does HTTP stand for" → search)
+because the model now suspected anything time-shaped of being
+time-sensitive.
+
+### v3: explicit *negative* rule
+
+> *"... Do NOT search for things you already know — basic facts,
+> arithmetic, definitions, general knowledge."*
+
+Result: ~86% (current). Specificity went to 100% — zero over-calls on the
+14 "no-search" rows. Under-calling persisted on "current officeholder"
+queries where the model's parametric knowledge *feels* current to it.
+
+### v4 (planned, Phase 3.1)
+
+Two more lines targeting the surviving under-calls:
+
+> *"For 'who is the current X' or 'who won Y last night' questions, you
+> cannot know without searching — your training data is stale and people
+> change. Search."*
+> *"Today's date is {now}. Anything from after this date is current."*
+
+The second is the same prompt anchor Phase 5 uses for time grounding —
+the model needing it for the search decision is a clue Phase 5 will want
+it everywhere.
+
+**Lesson:** Local 7B prompt tuning is *not* the lazy fallback when the
+architecture wobbles — it's the load-bearing technique. Each iteration
+moved 5–10 points of accuracy. The eval is what made the iteration
+honest; without it, "v1 felt fine" would have shipped.
+
+---
+
 ## 8. Failure Modes & Mitigations (Summary)
 
 | Failure | Likelihood (local 7B) | Mitigation | Where |
@@ -293,6 +348,42 @@ Phase 2 warm latency was ~0.6–1.1s for a no-tool answer. A tool turn is
 This number is a headline Phase 3 metric. ~4–5s for a spoken web answer is
 acceptable; if it's much worse, the data points to where (slow search
 provider? second LLM round too long?). Don't optimize before measuring.
+
+---
+
+## 9.5 Observability
+
+What the `[timing]` line emits during a tool turn:
+
+```
+[wake #4 @ 14:32:08] listening...
+[recorded] 2.3s
+[you] what's the weather in San Francisco
+[tool] -> web_search({"query": "current weather San Francisco"})
+[tool] <- web_search: 'San Francisco weather: 62°F, partly cloudy, light breeze...'
+[jarvis] Right now San Francisco is 62 and partly cloudy.
+[timing] stt=410ms  agent=14820ms  eos->audio=15230ms  total=18900ms
+[timing.detail] llm_round_1=920ms tool_web_search=2240ms llm_round_2=11660ms
+```
+
+Per-round detail is what diagnosed the Phase 3 latency gap: it's not the
+network (2.2s), it's the second LLM round synthesizing from ~3KB of DDG
+snippets on a 7B (11.7s). Without per-stage timing, the obvious-but-wrong
+fix would have been "swap search providers" — when the real fix is "trim
+the snippets before synthesis."
+
+### Debugging recipes
+
+Quick map from symptom → first thing to check:
+
+| Symptom | First check |
+|---|---|
+| Model never calls the tool | `agent/prompt.py`: is the negative rule (§7) still there? Eval: are *all* SEARCH rows failing or just one category? |
+| Model calls the tool too often | Same prompt, opposite rule. Look for an *under*-specified description in `tools/web_search.py`. |
+| Model calls a tool that doesn't exist | Tool name mismatch between `registry.py` and the model's view. Print `registry.ollama_schemas()` and compare. |
+| `tool_loop` infinite-loops | `max_tool_iters` cap should be 5; if it's hitting the cap, the model is ignoring tool results — sharpen the §7 result-ignoring rule. |
+| MCP server starts then dies | `MCPClient.start()` raises with the captured `_start_error`; check stderr from the spawned process (`uvx duckduckgo-mcp-server` running alone) |
+| `JSONSchema` validation rejects every call | Schema mismatch between MCP server's `inputSchema` and ours; print both. |
 
 ---
 

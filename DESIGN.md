@@ -471,6 +471,47 @@ later ("what should I order at the café?"). Was the fact retrieved? Was
 it used? Manually scored, small sample, repeat after retrieval-strategy
 changes.
 
+### 10.5 Observability
+
+What gets logged on every turn, deliberately chosen:
+
+- **Latency line** — per-stage milliseconds (`stt`, `agent`, `tool_*`,
+  `eos->audio`, `total`). This is the operational signal; it makes
+  regressions visible without inspecting any user content.
+- **Wake counter** — `[wake #N @ HH:MM:SS]`. Idle-time false-wake rate
+  is computed from this stream, not from a heuristic on STT.
+- **Tool calls** — name + arguments + 120-char prefix of the result.
+  120 chars is the line-length compromise: enough to debug a wrong
+  call, short enough that an accidental `tail -f` over the user's
+  shoulder doesn't leak the world.
+- **Confirmation verdicts** — `[confirm] attempt N: heard 'yes' -> yes`.
+  Critical for auditing the safety property over real use.
+
+What deliberately does **not** get logged:
+
+- Whisper transcripts (the user's words).
+- LLM messages content.
+- Tool call results beyond the 120-char prefix.
+- Email bodies, calendar event details, address book lookups.
+
+The asymmetry is intentional: the *operational* layer is observable; the
+*content* layer is not, except inside `memory.db` which the user can
+inspect, export, or wipe with `jarvis memory ...`.
+
+### 10.6 What I'd build into CI if this were a team project
+
+Not in v1 (single user, no CI), but the design is shaped to permit it:
+
+- `evals/toolcall.py` runs against a fixture LLM (recorded responses) for
+  fast determinism, against the live Ollama server in a slower nightly job.
+- `evals/confirm.py` and `evals/time.py` are pure-function tests — fast.
+- `evals/memory.py` runs against a fresh `memory.db` per invocation;
+  the harness owns the seed.
+
+The eval suite *is* the regression suite. There's no separate "unit
+test" tier for the agent loop — the failure modes the loop guards
+against are exactly what `evals/toolcall.py` covers.
+
 ---
 
 ## 11. Interview Talking Points
